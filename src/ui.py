@@ -47,7 +47,6 @@ st.divider()
 # Trigger analysis when button is pressed
 if st.button("Evaluate Churn Risk Profile", type="primary", use_container_width=True):
     
-    # Map visual UI labels to the exact string names expected by our Pydantic schema
     payload = {
         "gender": gender,
         "SeniorCitizen": 1 if senior_citizen == "Yes" else 0,
@@ -70,31 +69,37 @@ if st.button("Evaluate Churn Risk Profile", type="primary", use_container_width=
         "TotalCharges": float(total_charges)
     }
     
+    CUSTOM_THRESHOLD = 0.32  
+    prob = None
+    
+    # --- HYBRID INFERENCE ENGINE ---
     try:
-        # Send an HTTP POST request to our running FastAPI microservice backend
-        response = requests.post("http://127.0.0.1:8000/predict", json=payload)
-        
+        # Strategy A: Attempt to hit the production FastAPI Microservice gateway
+        response = requests.post("http://127.0.0.1:8000/predict", json=payload, timeout=2)
         if response.status_code == 200:
-            result = response.json()
-            prob = result["churn_probability"]
-            
-            # --- CUSTOM BUSINESS THRESHOLD ENGINE ---
-            # Instead of accepting the default 50% limit from FastAPI, 
-            # we implement our tuned threshold directly in the presentation layer!
-            CUSTOM_THRESHOLD = 0.32  
-            
-            st.subheader("🔮 Analysis Engine Output")
-            
-            # Display risk metrics cleanly based on our custom business rule threshold
-            if prob >= CUSTOM_THRESHOLD:
-                st.error(f"🚨 ALERT: HIGH CHURN RISK INDICATION (Probability: {prob * 100:.2f}%)")
-                st.markdown(f"**Operational Threshold Notice:** This account has crossed our target risk threshold of {CUSTOM_THRESHOLD * 100:.0f}%. Proactive account retention workflows should be initiated.")
-            else:
-                st.success(f"✅ STATUS NORMAL: ACCOUNT STABLE (Probability: {prob * 100:.2f}%)")
-                st.markdown(f"The structural risk profile for this customer remains within nominal parameters.")
+            prob = response.json()["churn_probability"]
+            st.caption("⚡ Inference Mode: High-throughput API Gateway (Local Microservice)")
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        # Strategy B: Serverless Cloud Fallback (Load artifact directly into presentation layer)
+        import os
+        import joblib
+        import pandas as pd
+        
+        model_path = os.path.join('models', 'churn_pipeline.joblib')
+        if os.path.exists(model_path):
+            pipeline = joblib.load(model_path)
+            input_df = pd.DataFrame([payload])
+            prob = float(pipeline.predict_proba(input_df)[0][1])
+            st.caption("☁️ Inference Mode: Serverless Cloud Fallback (Direct Artifact Slicing)")
         else:
-            st.error(f"Backend API returned an error status code: {response.status_code}")
-            st.json(response.json())
-            
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Communication Failure: Could not connect to the FastAPI backend. Is your Uvicorn server running on port 8000?")
+            st.error("❌ Critical System Failure: Neither the API Gateway nor the local model artifact could be resolved.")
+
+    # --- RENDER RESULTS VIA BUSINESS LOGIC ---
+    if prob is not None:
+        st.subheader("🔮 Analysis Engine Output")
+        if prob >= CUSTOM_THRESHOLD:
+            st.error(f"🚨 ALERT: HIGH CHURN RISK INDICATION (Probability: {prob * 100:.2f}%)")
+            st.markdown(f"**Operational Threshold Notice:** This account has crossed our target risk threshold of {CUSTOM_THRESHOLD * 100:.0f}%. Proactive account retention workflows should be initiated.")
+        else:
+            st.success(f"✅ STATUS NORMAL: ACCOUNT STABLE (Probability: {prob * 100:.2f}%)")
+            st.markdown(f"The structural risk profile for this customer remains within nominal parameters.")
